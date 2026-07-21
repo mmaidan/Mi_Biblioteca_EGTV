@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { uploadCover } from "./storage.js";
 import {
   Search,
   Plus,
@@ -41,6 +42,7 @@ import {
   Barcode,
   ClipboardList,
   FileText,
+  Image as ImageIcon,
 } from "lucide-react";
 
 // ---- Palette ----
@@ -446,6 +448,7 @@ export default function Biblioteca() {
       condition: data.condition || "Bueno",
       notes: data.notes.trim(),
       isbn: (data.isbn || "").trim(),
+      coverUrl: data.coverUrl || null,
       status: "available",
       loan: null,
       history: [],
@@ -492,6 +495,11 @@ export default function Biblioteca() {
     setBooks((prev) => prev.filter((b) => b.id !== id));
     setDetailModal(null);
     showToast("Libro eliminado");
+  }
+
+  function updateBookCover(id, coverUrl) {
+    setBooks((prev) => prev.map((b) => (b.id === id ? { ...b, coverUrl } : b)));
+    showToast(coverUrl ? "Portada actualizada" : "Portada quitada");
   }
 
   function lendBook(id, loan) {
@@ -1053,6 +1061,7 @@ export default function Biblioteca() {
             setDetailModal(null);
           }}
           onRate={(value) => rateBook(detailModal, value)}
+          onChangeCover={(url) => updateBookCover(detailModal, url)}
         />
       )}
       {surprise && books.find((b) => b.id === surprise) && (
@@ -1238,7 +1247,11 @@ function BookCard({ book, perms, currentUser, schoolLabel, editorialLabel, onOpe
   return (
     <div className="card-hover rounded-sm overflow-hidden border flex flex-col" style={{ background: "#FFFCFE", borderColor: "#2E1A4722" }}>
       <div className="flex">
-        <div style={{ background: spine, width: 10 }} />
+        {book.coverUrl ? (
+          <img src={book.coverUrl} alt="" className="w-16 shrink-0 object-cover" style={{ minHeight: "100%" }} />
+        ) : (
+          <div style={{ background: spine, width: 10 }} />
+        )}
         <button onClick={onOpen} className="flex-1 text-left p-4">
           <div className="flex items-center justify-between gap-2 mb-1">
             <p className="font-mono text-[10px] uppercase tracking-widest opacity-50">{book.genre}</p>
@@ -1409,7 +1422,14 @@ function GroupCard({ copies, schoolLabel, editorialLabel, onOpenCopies }) {
       className="card-hover rounded-sm overflow-hidden border flex text-left"
       style={{ background: "#FFFCFE", borderColor: "#2E1A4722" }}
     >
-      <div style={{ background: spine, width: 10 }} />
+      {(() => {
+        const withCover = copies.find((c) => c.coverUrl);
+        return withCover ? (
+          <img src={withCover.coverUrl} alt="" className="w-16 shrink-0 object-cover" style={{ minHeight: "100%" }} />
+        ) : (
+          <div style={{ background: spine, width: 10 }} />
+        );
+      })()}
       <div className="flex-1 p-4">
         <div className="flex items-center justify-between gap-2 mb-1">
           <p className="font-mono text-[10px] uppercase tracking-widest opacity-50">{first.genre}</p>
@@ -1631,12 +1651,44 @@ function AddBookModal({ schools, editorials, onClose, onSave }) {
   const [schoolId, setSchoolId] = useState(schools[0] ? schools[0].id : "");
   const [editorialId, setEditorialId] = useState(editorials[0] ? editorials[0].id : "");
   const [quantity, setQuantity] = useState(1);
+  const [coverFile, setCoverFile] = useState(null);
+  const [coverPreview, setCoverPreview] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [coverError, setCoverError] = useState("");
 
-  function submit() {
+  function handleCoverChange(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setCoverError("Elegí un archivo de imagen (JPG, PNG...).");
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setCoverError("La imagen es muy pesada (máximo 15MB).");
+      return;
+    }
+    setCoverError("");
+    setCoverFile(file);
+    setCoverPreview(URL.createObjectURL(file));
+  }
+
+  async function submit() {
     if (!title.trim() || !author.trim() || !schoolId || !editorialId) return;
     const finalGenre = genre === "Otro" ? customGenre.trim() || "Otro" : genre;
     const qty = Math.min(50, Math.max(1, parseInt(quantity, 10) || 1));
-    onSave({ title, author, isbn, genre: finalGenre, condition, notes, schoolId, editorialId, quantity: qty });
+    let coverUrl = null;
+    if (coverFile) {
+      setUploading(true);
+      try {
+        coverUrl = await uploadCover(coverFile);
+      } catch (err) {
+        setCoverError("No se pudo subir la portada. Probá de nuevo (¿hay conexión?).");
+        setUploading(false);
+        return;
+      }
+      setUploading(false);
+    }
+    onSave({ title, author, isbn, genre: finalGenre, condition, notes, schoolId, editorialId, quantity: qty, coverUrl });
   }
 
   if (schools.length === 0) {
@@ -1713,13 +1765,29 @@ function AddBookModal({ schools, editorials, onClose, onSave }) {
       <Field label="Notas" icon={StickyNote}>
         <textarea className="w-full px-3 py-2 rounded-sm border text-sm" style={inputStyle} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Edición, dedicatoria, detalles..." />
       </Field>
+      <Field label="Portada (opcional)" icon={ImageIcon}>
+        <div className="flex items-center gap-3">
+          {coverPreview ? (
+            <img src={coverPreview} alt="Vista previa de la portada" className="w-14 h-20 object-cover rounded-sm border" style={{ borderColor: "#2E1A4733" }} />
+          ) : (
+            <div className="w-14 h-20 rounded-sm border flex items-center justify-center shrink-0" style={{ borderColor: "#2E1A4733", background: "#2E1A4708" }}>
+              <ImageIcon size={18} className="opacity-30" />
+            </div>
+          )}
+          <div className="flex-1">
+            <input type="file" accept="image/*" onChange={handleCoverChange} className="w-full text-xs" />
+            <p className="text-[11px] opacity-50 mt-1">Se achica sola antes de subirla, no hace falta editarla.</p>
+          </div>
+        </div>
+        {coverError && <p className="text-xs mt-1" style={{ color: "#7A2E6B" }}>{coverError}</p>}
+      </Field>
       <button
         onClick={submit}
-        disabled={!title.trim() || !author.trim() || !schoolId || !editorialId}
+        disabled={!title.trim() || !author.trim() || !schoolId || !editorialId || uploading}
         className="w-full mt-1 font-mono text-sm uppercase tracking-wide py-2.5 rounded-sm disabled:opacity-40"
         style={{ background: "#2E1A47", color: "#FFFCFE" }}
       >
-        Añadir al catálogo
+        {uploading ? "Subiendo portada..." : "Añadir al catálogo"}
       </button>
     </Modal>
   );
@@ -1798,16 +1866,61 @@ function LoanModal({ book, initialBorrower, students, onClose, onSave }) {
   );
 }
 
-function DetailModal({ book, perms, currentUser, schoolLabel, editorialLabel, onClose, onDelete, onReturn, onLend, onRequest, onCancelRequest, onRate }) {
+function DetailModal({ book, perms, currentUser, schoolLabel, editorialLabel, onClose, onDelete, onReturn, onLend, onRequest, onCancelRequest, onRate, onChangeCover }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [coverErr, setCoverErr] = useState("");
   const overdue = book.status === "loaned" && book.loan && daysUntil(book.loan.dueDate) < 0;
   const dueSoon = isDueSoon(book);
   const isMyRequest = book.status === "requested" && book.request && currentUser && book.request.studentName.toLowerCase() === currentUser.name.toLowerCase();
   const rating = avgRating(book);
   const myRating = book.ratings && currentUser ? book.ratings.find((r) => r.by === currentUser.name) : null;
 
+  async function handleCoverPick(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setCoverErr("Elegí un archivo de imagen.");
+      return;
+    }
+    setCoverErr("");
+    setUploadingCover(true);
+    try {
+      const url = await uploadCover(file);
+      onChangeCover(url);
+    } catch (err) {
+      setCoverErr("No se pudo subir la portada. ¿Hay conexión?");
+    }
+    setUploadingCover(false);
+  }
+
   return (
     <Modal onClose={onClose} title={book.title}>
+      {(book.coverUrl || perms.addBook) && (
+        <div className="flex items-center gap-3 mb-4">
+          {book.coverUrl ? (
+            <img src={book.coverUrl} alt="" className="w-16 h-24 object-cover rounded-sm border" style={{ borderColor: "#2E1A4733" }} />
+          ) : (
+            <div className="w-16 h-24 rounded-sm border flex items-center justify-center shrink-0" style={{ borderColor: "#2E1A4733", background: "#2E1A4708" }}>
+              <ImageIcon size={20} className="opacity-30" />
+            </div>
+          )}
+          {perms.addBook && (
+            <div className="flex-1">
+              <label className="inline-block cursor-pointer font-mono text-[11px] uppercase tracking-wide px-3 py-1.5 rounded-sm border" style={{ borderColor: "#2E1A4733" }}>
+                {uploadingCover ? "Subiendo..." : book.coverUrl ? "Cambiar portada" : "Agregar portada"}
+                <input type="file" accept="image/*" className="hidden" onChange={handleCoverPick} disabled={uploadingCover} />
+              </label>
+              {book.coverUrl && (
+                <button onClick={() => onChangeCover(null)} className="ml-2 font-mono text-[11px] uppercase tracking-wide opacity-50 hover:opacity-90">
+                  Quitar
+                </button>
+              )}
+              {coverErr && <p className="text-[11px] mt-1" style={{ color: "#7A2E6B" }}>{coverErr}</p>}
+            </div>
+          )}
+        </div>
+      )}
       <p className="text-sm opacity-70 mb-1">{book.author}</p>
       <p className="flex items-center gap-1 font-mono text-[11px] uppercase tracking-widest opacity-50 mb-3">
         {book.genre} · Estado: {book.condition}

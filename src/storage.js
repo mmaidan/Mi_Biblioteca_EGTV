@@ -100,5 +100,48 @@ async function list(prefix = "") {
   return { keys: (data || []).map((r) => r.key), prefix, shared: true };
 }
 
+// --- Portadas (Supabase Storage) ----------------------------------------
+const COVERS_BUCKET = "covers";
+const MAX_COVER_WIDTH = 500;
+
+// Achica y comprime la imagen en el propio navegador antes de subirla, así
+// cada portada pesa unos pocos KB en vez de varios MB (la foto tal cual sale
+// de un celular).
+function resizeImage(file, maxWidth = MAX_COVER_WIDTH) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      img.onload = () => {
+        const scale = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("No se pudo procesar la imagen"))), "image/jpeg", 0.82);
+      };
+      img.onerror = () => reject(new Error("No se pudo leer la imagen"));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadCover(file) {
+  const blob = await resizeImage(file);
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  const { error } = await supabase.storage.from(COVERS_BUCKET).upload(path, blob, {
+    contentType: "image/jpeg",
+    cacheControl: "31536000",
+    upsert: false,
+  });
+  if (error) throw error;
+  const { data } = supabase.storage.from(COVERS_BUCKET).getPublicUrl(path);
+  return data.publicUrl;
+}
+
 const storage = { get, set, delete: del, list };
 export default storage;
+export { uploadCover };
